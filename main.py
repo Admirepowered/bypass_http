@@ -4,6 +4,7 @@ import select
 import threading
 import httpx
 import httpcore
+import struct
 def create_ssl_context():
     """创建自定义的 SSL 上下文"""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -216,8 +217,126 @@ def start_proxy():
         client_handler = threading.Thread(target=handle_client, args=(client_socket,))
         client_handler.start()
 
+def disable_sni_forward(client_sock, target_ip, target_port):
+    try:
+        # 代理作为 TLS 服务端的 SSLContext
+        server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.load_cert_chain(certfile='server_cert.pem', keyfile='server_key.pem')
+
+        # 将 client_sock 包装成 TLS 服务端 socket，解密客户端 TLS
+        tls_client_sock = server_context.wrap_socket(client_sock, server_side=True)
+
+        # 代理作为 TLS 客户端连接真实服务器
+        client_context = ssl.create_default_context()
+        client_context.check_hostname = False
+        client_context.verify_mode = ssl.CERT_NONE
+
+        server_sock = socket.create_connection((target_ip, target_port))
+        tls_server_sock = client_context.wrap_socket(server_sock, server_hostname=None)  # 可以关闭SNI或保留
+
+        sockets = [tls_client_sock, tls_server_sock]
+
+        while True:
+            rlist, _, _ = select.select(sockets, [], [])
+            for s in rlist:
+                data = s.recv(4096)
+                if not data:
+                    # 一方断开，关闭所有连接
+                    for sock in sockets:
+                        sock.close()
+                    return
+
+                if s is tls_client_sock:
+                    # 收到客户端发来的明文数据，转发给服务器（自动加密）
+                    tls_server_sock.sendall(data)
+                else:
+                    # 收到服务器返回的明文数据，转发给客户端（自动加密）
+                    tls_client_sock.sendall(data)
+
+    except Exception as e:
+        print(f"[!] 转发错误: {e}")
+        client_sock.close()
+
+def handle_socks5(client_sock):
+    try:
+        # 1. SOCKS5 greeting
+        ver, nmethods = client_sock.recv(2)
+        client_sock.recv(nmethods)
+        client_sock.sendall(b'\x05\x00')  # no auth
+
+        # 2. SOCKS5 request
+        ver, cmd, _, atyp = client_sock.recv(4)
+        if cmd != 1:
+            client_sock.sendall(b'\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00')
+            return
+
+        if atyp == 3:  # domain name
+            domain_len = client_sock.recv(1)[0]
+            domain = client_sock.recv(domain_len).decode()
+        else:
+            print("仅支持域名连接")
+            client_sock.close()
+            return
+
+        port = int.from_bytes(client_sock.recv(2), "big")
+
+        if port != 443:
+            print(f"[SKIP] 非 443 端口: {domain}:{port}")
+            client_sock.close()
+            return
+
+
+        
+        client_sock.sendall(b'\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00')
+        
+        ip = found(domain)
+        print(f"[CONNECT] {domain}:{port} -> {ip}")
+        if not ip:
+
+            # 找不到映射IP，做透明TLS转发，客户端的TLS流量原封不动地转发给目标服务器
+            print(f"[TRANSPARENT TLS FORWARD] {domain}:{port} -> direct TLS forwarding")
+
+            # 直接建立到目标服务器的 TCP 连接
+            remote_sock = socket.create_connection((domain, port))
+            
+            # 双向转发 client_sock <-> remote_sock（不做 TLS 解密）
+            sockets = [client_sock, remote_sock]
+
+            while True:
+                rlist, _, _ = select.select(sockets, [], [])
+                for s in rlist:
+                    data = s.recv(4096)
+                    if not data:
+                        for sock in sockets:
+                            sock.close()
+                        return
+                    if s is client_sock:
+                        remote_sock.sendall(data)
+                    else:
+                        client_sock.sendall(data)
+        else:
+            
+            # 找到 IP，执行 TLS MITM，代理承接TLS解密流量
+            print(f"[MITM TLS FORWARD] {domain}:{port} -> {ip}")
+            threading.Thread(target=disable_sni_forward, args=(client_sock, ip, port), daemon=True).start()
+        #threading.Thread(target=disable_sni_forward, args=(client_sock, ip, port), daemon=True).start()
+    except Exception as e:
+        print(f"[!] 错误: {e}")
+        client_sock.close()
+
+def start_sock5_proxy():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('0.0.0.0', 1080))
+    s.listen(100)
+    print("[*] SOCKS5 代理启动，监听 1080（仅 443 且禁用 SNI）")
+
+    while True:
+        client, addr = s.accept()
+        threading.Thread(target=handle_socks5, args=(client,), daemon=True).start()
+
 if __name__ == "__main__":
     #start_proxy()
+    start_sock5_proxy()
     url = "https://steamcommunity.com/"
     test=make_request(url, method="GET")
     print(test)
