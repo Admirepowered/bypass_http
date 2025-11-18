@@ -94,7 +94,8 @@ def test():
 
 def found(domain):
     """根据域名返回对应的 IP 地址"""
-    domain_list = ["steamcommunity.com:2.16.174.204", "baidu.com:127.0.0.2"]
+    #'2.16.174.204'
+    domain_list = ["steamcommunity.com:23.41.142.46", "baidu.com:127.0.0.2","pixiv.net:104.16.132.229"]
     # 遍历列表，查找匹配的域名
     for entry in domain_list:
         # 按 ':' 分割域名和 IP
@@ -336,7 +337,7 @@ def start_sock5_proxy():
 
 if __name__ == "__main__":
     #start_proxy()
-    start_sock5_proxy()
+    #start_sock5_proxy()
     url = "https://steamcommunity.com/"
     test=make_request(url, method="GET")
     print(test)
