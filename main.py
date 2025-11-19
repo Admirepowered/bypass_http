@@ -3,8 +3,117 @@ import ssl
 import select
 import threading
 import httpx
-import httpcore
-import struct
+import json
+import sqlite3
+import time
+
+DB_FILE = "dns_cache.sqlite"
+EXPIRATION = 3 * 24 * 3600  # 3天秒数：259200
+
+_db_lock = threading.Lock()
+
+domain_list=[]
+
+def init_db():
+    with _db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS dns_cache (
+            domain TEXT PRIMARY KEY,
+            ip TEXT NOT NULL,
+            ts INTEGER NOT NULL
+        )
+        """)
+        conn.commit()
+        conn.close()
+
+
+# ======================================================
+# 保存至数据库
+# ======================================================
+def save_ip(domain, ip):
+    with _db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+        ts = int(time.time())
+        cur.execute("""
+            INSERT OR REPLACE INTO dns_cache (domain, ip, ts)
+            VALUES (?, ?, ?)
+        """, (domain, ip, ts))
+        conn.commit()
+        conn.close()
+
+
+# ======================================================
+# 从数据库获取（如果未过期）
+# ======================================================
+def load_ip(domain):
+    with _db_lock:
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+        cur.execute("SELECT ip, ts FROM dns_cache WHERE domain=?", (domain,))
+        row = cur.fetchone()
+        conn.close()
+
+    if not row:
+        return None
+
+    ip, ts = row
+
+    if time.time() - ts > EXPIRATION:
+        # 过期
+        return None
+
+    return ip
+
+
+def extract_ip(json_text):
+    try:
+        obj = json.loads(json_text)
+        answers = obj.get("Answer", [])
+        if not answers:
+            return None
+        
+        # 提取 A 记录（type=1）
+        for ans in answers:
+            if ans.get("type") == 1:
+                return ans.get("data")
+        return None
+    except json.JSONDecodeError:
+        return None
+
+def qury_ip(domain):
+    url = f"https://cloudflare-dns.com/dns-query?name={domain}&type=A"
+    resp = make_request(
+        url,
+        method="GET",
+        headers={
+        "Accept": "application/dns-json"
+    }
+    )
+    ip = extract_ip(resp)
+    return ip
+    
+def resolve(domain):
+    # 尝试数据库
+    ip = load_ip(domain)
+    if ip:
+        print(f"[CACHE HIT] {domain} → {ip}")
+        return ip
+
+    # 重新解析
+    print(f"[CACHE MISS] Resolving {domain} via DoH...")
+    ip = qury_ip(domain)
+
+    if ip:
+        save_ip(domain, ip)
+        print(f"[CACHE UPDATE] {domain} → {ip}")
+        return ip
+
+    print(f"[ERROR] 无法解析 {domain}")
+    return None
+
 def create_ssl_context():
     """创建自定义的 SSL 上下文"""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -46,7 +155,7 @@ def make_request(url, method="GET", data=None, headers=None):
                 headers["Host"] = hostname
                 
             if method.upper() == "POST":
-                response = client.post(request, headers=headers, data=data)
+                response = client.post(request, headers=headers, content=data)
             else:
                 response = client.get(request, headers=headers)
             # 手动设置目标 IP 并添加 Host Header
@@ -95,7 +204,8 @@ def test():
 def found(domain):
     """根据域名返回对应的 IP 地址"""
     #'2.16.174.204'
-    domain_list = ["steamcommunity.com:23.41.142.46", "baidu.com:127.0.0.2","pixiv.net:104.16.132.229"]
+    
+    
     # 遍历列表，查找匹配的域名
     for entry in domain_list:
         # 按 ':' 分割域名和 IP
@@ -106,6 +216,9 @@ def found(domain):
             return ip_part
     
     # 如果没有找到，返回 None
+    result = resolve(domain)
+    if result:
+        return result
     return None
 def handle_client(client_socket):
     """通过 select 实现双向转发"""
@@ -338,6 +451,10 @@ def start_sock5_proxy():
 if __name__ == "__main__":
     #start_proxy()
     #start_sock5_proxy()
+
+    domain_list = ["steamcommunity.com:23.41.142.46","cloudflare-dns.com:104.16.249.249"]#init fist dns
+    init_db()
+
     url = "https://steamcommunity.com/"
     test=make_request(url, method="GET")
     print(test)
