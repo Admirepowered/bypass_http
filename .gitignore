@@ -1,1 +1,3 @@
 *.sqlite
+*.mmdb
+venv

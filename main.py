@@ -6,6 +6,7 @@ import httpx
 import json
 import sqlite3
 import time
+import sys
 
 DB_FILE = "dns_cache.sqlite"
 EXPIRATION = 3 * 24 * 3600  # 3天秒数：259200
@@ -451,10 +452,13 @@ def start_sock5_proxy():
 if __name__ == "__main__":
     #start_proxy()
     #start_sock5_proxy()
-
-    domain_list = ["steamcommunity.com:23.41.142.46","cloudflare-dns.com:104.16.249.249"]#init fist dns
+    #"steamcommunity.com:23.41.142.46",
+    domain_list = ["cloudflare-dns.com:104.16.249.249"]#init fist dns
     init_db()
+    if len(sys.argv) > 1:
+        url = sys.argv[1]
+    else:
+        url = "https://steamcommunity.com/"
 
-    url = "https://steamcommunity.com/"
     test=make_request(url, method="GET")
     print(test)

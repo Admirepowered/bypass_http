@@ -7,23 +7,23 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
-	"os"
 )
 
 func createTLSConfig() *tls.Config {
 	return &tls.Config{
-		InsecureSkipVerify: true, 
+		InsecureSkipVerify: true,
 		ServerName:         "",
 	}
 }
 
 func found(domain string) string {
 	domainList := map[string]string{
-		"steamcommunity.com": "2.16.174.204",
-		"github.com":"140.82.116.3",
-		"objects.githubusercontent.com":"185.199.108.133",
+		"steamcommunity.com":            "2.16.174.204",
+		"github.com":                    "140.82.116.3",
+		"objects.githubusercontent.com": "185.199.108.133",
 	}
 
 	if ip, ok := domainList[domain]; ok {
@@ -71,20 +71,20 @@ func makeRequest(url string, method string, data string, headers map[string]stri
 	if err != nil {
 		return "", err
 	}
-	req.Host=hostname
+	req.Host = hostname
 	for key, value := range headers {
-		fmt.Println(key,value)
+		fmt.Println(key, value)
 		req.Header.Set(key, value)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("请求错误: %s", err)
 	}
-	Location:=resp.Header.Get("Location")
+	Location := resp.Header.Get("Location")
 
 	fmt.Println(Location)
-	if Location!=""{
-		return makeRequest(Location,method,data,headers)
+	if Location != "" {
+		return makeRequest(Location, method, data, headers)
 	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
@@ -101,7 +101,7 @@ func main() {
 		fmt.Println("请求失败:", err)
 		return
 	}
-	filePath := "output.bin"
+	filePath := "Country.mmdb"
 	err = ioutil.WriteFile(filePath, []byte(response), 0644)
 	if err != nil {
 		fmt.Println("写入文件失败:", err)
